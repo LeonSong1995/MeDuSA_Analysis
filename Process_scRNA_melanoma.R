@@ -85,7 +85,7 @@ sce$cell_trajectory[colnames(CD8)] = time
 
 bulk = readRDS('../TCGA_melanoma.rds')
 
-# User can try the wilcox test, the result is similar. 
+# Try the wilcox test, the result is similar. 
 gene = MeDuSA::MeDuSA_marker(method = 'gam',sce = CD8,k = 10,family='gaussian',
                      bulk = bulk,geneNumber = 200,ncpu = 4,nbins = 10)
 saveRDS(gene,'../gene_melanoma.rds')
