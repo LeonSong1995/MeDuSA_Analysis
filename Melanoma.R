@@ -128,7 +128,7 @@ MeDuSA_CAR_NS = MeDuSA(bulk,sce,select.ct='CD8_Tcells',resolution=100,fixCov=NUL
                        markerGene=NULL,nbins=10,knots=10,family='gaussian',geneNumber=200,
                        CAR=F,phi=c(0.2,0.4,0.6,0.9),method = 'wilcox',
                        ncpu=6,start=c(1e-5,1e-2),maxiter=1e+4,
-                       smooth=T,smoothMethod='loess',span=0.8,neighbor=5,fractional=F)
+                       smooth=T,smoothMethod='loess',span=075,neighbor=5,fractional=F)
 
 
 all = colMeans(abundance[ceiling(2*nrow(abundance)/3):nrow(abundance),])
