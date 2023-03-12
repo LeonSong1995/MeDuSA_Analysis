@@ -1,85 +1,88 @@
 #! /usr/lib/R/bin/Rscript
-###Permutation test of the scATAC-seq
-library(data.table)
-library(argparser)
 library(viridisLite)
 library(ggplot2)
 library(parallel)
 library(GenomicRanges)
+library(data.table)
+library(argparser)
 
 p = arg_parser("Prepare SMR esd")
 p = add_argument(p, "ieQTL", help="")
+p = add_argument(p, "expand", help="")
+p = add_argument(p, "m", help="")
 p = add_argument(p, "out", help="")
 p = add_argument(p, "peak", help="")
-p = add_argument(p, "p", help="")
-p = add_argument(p, "type", help="")
 argv = parse_args(p)
 
-type = argv$type
+
+m = as.numeric(argv$m)
+expand = as.numeric(argv$expand)
+
 
 #null: 1 is null o is eQTL
-null = as.data.frame(fread("../GTEx_v8_Null_Table_49Tiss_Global.txt.gz"))
-confounders = as.data.frame(readRDS("../GTEx_v8_Confounders_Table_49Tiss_Global.bined.rds"))
-ieQTL = as.data.frame(fread(argv$ieQTL))
-if(type=='eQTL'){
-	ieQTL = ieQTL[ieQTL$pval_beta<argv$p,]
-}else if(type=='ieQTL'){
-	ieQTL = ieQTL[ieQTL$pval_adj_bh<argv$p,]
-}
-ieQTL$chr = sapply(ieQTL$variant_id,function(i){strsplit(i,split = '_')[[1]][1]})
-ieQTL$pos = as.numeric(sapply(ieQTL$variant_id,function(i){strsplit(i,split = '_')[[1]][2]}))
+confounders = as.data.frame(readRDS("../Esophagus_Mucosa.Confounders_Table_small.rds"))
+pheno = as.data.frame(read.table('../pheno.bed'))
+
+
+#peaks
 peak = readRDS(argv$peak)
-peak = peak[peak$score>0,]
+
+#confounders overlaping with peaks
+confounders.g = GRanges(seqnames = paste0(paste('b',confounders$CHR,sep="'"),"'"),
+               	   ranges = IRanges(start = confounders$POS-expand,end = confounders$POS+expand))
+confounders.use = confounders[na.omit(findOverlaps(peak, confounders.g, select="arbitrary")),]
 
 
-###prase the ieQTL table
-index = match(ieQTL[,'variant_id'],confounders[,'variant'])
-ieQTL$MAF_Bin = confounders$MAF_Bin[index]
-ieQTL$TSS_Bin = confounders$TSS_Bin[index]
-ieQTL$LD_Bin = confounders$LD_Bin[index]
+#prase the ieQTL table
+ieQTL = as.data.frame(read.table(argv$ieQTL))
+colnames(ieQTL) = c('chr','pos','end','id','gene','strand')
+info = confounders[match(ieQTL$id,confounders$SNP),]
+ieQTL$AF = info$AF
+ieQTL$dis_Tss = info$dis_Tss
 
-##Run permutations
-null_variat = c(null$variant[null$Global==1])
-null_variat = null_variat[!null_variat %in% ieQTL$variant_id]
-confounders = confounders[confounders$variant %in% null_variat,]
+#score of ieQTL
+csd_eQTL = GRanges(seqnames = paste0(paste('b',ieQTL$chr,sep="'"),"'"),
+               	   ranges = IRanges(start = ieQTL$pos-expand,end = ieQTL$pos+expand))
+x = peak$score[na.omit(findOverlaps(csd_eQTL, peak, select="arbitrary"))]
+x = mean(x)
+
+ieQTL  = ieQTL[na.omit(findOverlaps(peak,csd_eQTL, select="arbitrary")),]
+
+
+#Run permutations
+confounders.use = confounders.use[!confounders.use$SNP %in% ieQTL$id,]
 subset = sapply(1:nrow(ieQTL),function(i){
 	print(i)
 	temp = ieQTL[i,]
-	eligible = Reduce(intersect,list(which(temp$MAF_Bin==confounders$MAF_Bin),
-									 which(temp$TSS_Bin==confounders$TSS_Bin),
-									 which(temp$LD_Bin==confounders$LD_Bin)))
+	eligible = 	intersect(which(temp$AF==confounders.use$AF),which(temp$dis_Tss==confounders.use$dis_Tss))
 	list(eligible)
 })
 subset = subset[lapply(subset,length)!=0]
 
-permute = sapply(1:10000,function(i){
+
+
+y = sapply(1:m,function(i){
 	print(i)
-	id = sapply(subset,function(i){sample(i,1)})
-	pseudo = confounders[id,]
-	pseudoQTL = GRanges(seqnames = paste0(paste('b',pseudo$chr,sep="'"),"'"),
-	               ranges = IRanges(start = pseudo$pos-100,end = pseudo$pos+100))
-	r=peak[GenomicRanges::findOverlaps(pseudoQTL,peak)@to,]$score
-	mean(r)
+	id = c(sapply(subset,function(i){sample(i,1)}))
+	pseudo = confounders.use[id,]
+	pseudoQTL = GRanges(seqnames = paste0(paste('b',pseudo$CHR,sep="'"),"'"),
+	               ranges = IRanges(start = pseudo$POS-expand,end = pseudo$POS+expand))
+	score = peak$score[na.omit(findOverlaps(pseudoQTL, peak, select="arbitrary"))]
+	mean(score)
 })
-permute = na.omit(permute)
+y = na.omit(y)
 
 
-csd_eQTL = GRanges(seqnames = paste0(paste('b',ieQTL$chr,sep="'"),"'"),
-               ranges = IRanges(start = ieQTL$pos-100,end = ieQTL$pos+100))
-
-
-observed_fold_enrichment = mean(peak[GenomicRanges::findOverlaps(csd_eQTL,peak)@to,]$score)
-first_fold_enrichments = permute
-median_fold_enrichment = median(first_fold_enrichments)
-adjusted_fold_enrichment = round(observed_fold_enrichment/median_fold_enrichment,4)
-
-
-l95 = (median_fold_enrichment - quantile(first_fold_enrichments,0.025))/median_fold_enrichment
-lower_95 = adjusted_fold_enrichment - (adjusted_fold_enrichment*l95)
-
-u95 = (quantile(first_fold_enrichments,0.975) - median_fold_enrichment)/median_fold_enrichment
-upper_95 = adjusted_fold_enrichment + (adjusted_fold_enrichment*u95)
-
-p = length(which(observed_fold_enrichment<permute))/length(permute)
-fold = c(adjusted_fold_enrichment,lower_95,upper_95,p)
-write.table(fold,argv$out)
+y_mean = mean(y)
+v_y = var(y)
+OR = x/y_mean
+a = (x/y_mean)^2
+b = v_y / (x^2)
+c = v_y / (length(y)*y_mean^2)
+SE = sqrt(a*(b+c))
+lower = OR-1.96*SE
+upper = OR+1.96*SE
+Delta.fold = c(lower,OR,upper,x,SE)
+names(Delta.fold) = c("lower","OR","upper","percent","SE|p")
+Delta.fold
+write.table(t(Delta.fold),argv$out,row.names=F)
